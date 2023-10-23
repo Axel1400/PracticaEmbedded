@@ -1,4 +1,4 @@
-use std::io::stdout;
+use std::io::{stdout, Write};
 
 use crossterm::{
     terminal::{disable_raw_mode, LeaveAlternateScreen},
@@ -31,6 +31,7 @@ fn main() -> anyhow::Result<()> {
         input_audio_sender.clone(),
         network_sender.clone(),
     );
+    let (event_sender, _) = events::create_event_task(terminal_tx.clone());
 
     std::thread::sleep(std::time::Duration::from_millis(100));
     network_sender.send(network_thread::NetworkTaskCommand::MainTaskQueue(
@@ -48,6 +49,7 @@ fn main() -> anyhow::Result<()> {
     output_audio_sender.send(output_audio_task::OutputAudioTaskCommand::Exit)?;
     input_audio_sender.send(input_audio_task::InputAudioCommand::Exit)?;
     network_sender.send(network_thread::NetworkTaskCommand::Exit)?;
+    event_sender.send(events::EventCommand::Exit)?;
     let _ = output_audio_thread.join();
     let _ = input_audio_thread.join();
     let _ = network_thread.join();

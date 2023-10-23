@@ -31,7 +31,7 @@ fn input_audio_task(
     pcm.hw_params(&hw_params)?;
 
     let io = pcm.io_i16()?;
-    let mut buffer = vec![0; 8192 * 2];
+    let mut buffer = vec![0; 400 * 2];
 
     let mut record = false;
 
@@ -40,6 +40,10 @@ fn input_audio_task(
             Ok(read) => {
                 if record {
                     output_audio_sender.send(NetworkTaskCommand::SendAudio(buffer.clone()))?;
+                    // Set buffer to 0
+                    for i in 0..read {
+                        buffer[i] = 0;
+                    }
                 }
             }
             Err(e) => {

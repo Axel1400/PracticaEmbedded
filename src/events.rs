@@ -1,7 +1,7 @@
 use std::thread::{spawn, JoinHandle};
 
-use crossbeam::channel::{Sender, Receiver, unbounded};
-use evdev::Device;
+use crossbeam::channel::{unbounded, Receiver, Sender};
+use evdev::{Device, InputEventKind, Key};
 
 use crate::terminal_task::CallScreenCommand;
 
@@ -41,19 +41,25 @@ fn event_task(
 
         let events = device.fetch_events()?;
         for event in events {
-            match event.kind() {
-                evdev::InputEventKind::Synchronization(_) => todo!(),
-                evdev::InputEventKind::Key(_) => todo!(),
-                evdev::InputEventKind::RelAxis(_) => todo!(),
-                evdev::InputEventKind::AbsAxis(_) => todo!(),
-                evdev::InputEventKind::Misc(_) => todo!(),
-                evdev::InputEventKind::Switch(_) => todo!(),
-                evdev::InputEventKind::Led(_) => todo!(),
-                evdev::InputEventKind::Sound(_) => todo!(),
-                evdev::InputEventKind::ForceFeedback(_) => todo!(),
-                evdev::InputEventKind::ForceFeedbackStatus(_) => todo!(),
-                evdev::InputEventKind::UInput(_) => todo!(),
-                evdev::InputEventKind::Other => todo!(),
+            if let InputEventKind::Key(k) = event.kind() {
+                match k {
+                    Key::KEY_UP => {
+                        main_task_queue.send(CallScreenCommand::IncreaseVolume)?;
+                    }
+                    Key::KEY_DOWN => {
+                        main_task_queue.send(CallScreenCommand::DecreaseVolume)?;
+                    }
+                    Key::KEY_MUTE => {
+                        main_task_queue.send(CallScreenCommand::ToggleMute)?;
+                    }
+                    Key::KEY_SELECT => {
+                        main_task_queue.send(CallScreenCommand::AcceptCall)?;
+                    }
+                    Key::KEY_OK => {
+                        main_task_queue.send(CallScreenCommand::StopCall)?;
+                    }
+                    _ => {}
+                }
             }
         }
     }

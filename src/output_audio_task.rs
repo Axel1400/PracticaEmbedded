@@ -18,7 +18,7 @@ const MIXER_SELEM_NAME: &str = "Softmaster";
 // const MIXER_SELEM_NAME: &str = "Master";
 
 fn output_audio(receiver: Receiver<OutputAudioTaskCommand>) -> anyhow::Result<()> {
-    let output_pcm = alsa::PCM::new(OUTPUT_HARDWARE_NAME, alsa::Direction::Playback, true)?;
+    let output_pcm = alsa::PCM::new(OUTPUT_HARDWARE_NAME, alsa::Direction::Playback, false)?;
 
     let hw_params = HwParams::any(&output_pcm)?;
     hw_params.set_access(alsa::pcm::Access::RWInterleaved)?;
@@ -59,7 +59,7 @@ fn output_audio(receiver: Receiver<OutputAudioTaskCommand>) -> anyhow::Result<()
             io.writei(&buffer)?;
         }
         // Receive a command from the main thread
-        if let Ok(cmd) = receiver.recv_timeout(std::time::Duration::from_millis(5)) {
+        if let Ok(cmd) = receiver.try_recv() {
             match cmd {
                 OutputAudioTaskCommand::Play(buffer) => {
                     // Play doesn't actually play, it just buffers the audio

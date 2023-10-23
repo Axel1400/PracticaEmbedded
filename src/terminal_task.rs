@@ -10,7 +10,8 @@ use crossterm::{
 };
 use ratatui::{prelude::*, widgets::*};
 use std::{
-    io::stdout,
+    fs::File,
+    io::{stdout, Write},
     net::{IpAddr, SocketAddr},
     thread::{self, JoinHandle},
 };
@@ -71,6 +72,7 @@ impl HomeScreenState {
     }
 }
 
+#[derive(Clone, Copy)]
 enum CallScreenStatus {
     Calling,
     IncomingCall,
@@ -90,6 +92,9 @@ pub enum CallScreenCommand {
     EndCall,
     AcceptCall,
     RejectCall,
+    IncreaseVolume,
+    DecreaseVolume,
+    ToggleMute,
     Exit,
 }
 
@@ -142,12 +147,22 @@ enum ScreenState {
     Call(CallScreenState),
 }
 
+struct LedInfo {
+    red: File,
+    green: File,
+    blue: File,
+}
+
 struct AppState {
     pub output_audio_sender: Sender<OutputAudioTaskCommand>,
     pub input_audio_sender: Sender<InputAudioCommand>,
     pub network_sender: Sender<NetworkTaskCommand>,
     pub call_rx: Receiver<CallScreenCommand>,
     pub screen_state: ScreenState,
+    pub led_0: LedInfo,
+    pub led_1: LedInfo,
+    pub led_2: LedInfo,
+    pub animation_state: u8,
 }
 
 impl AppState {
@@ -157,13 +172,171 @@ impl AppState {
         network_sender: Sender<NetworkTaskCommand>,
         call_rx: Receiver<CallScreenCommand>,
     ) -> AppState {
+        let led_0 = LedInfo {
+            blue: std::fs::OpenOptions::new()
+                .write(true)
+                .open("/sys/class/leds/pca995x:blue0/brightness")
+                .unwrap(),
+            green: std::fs::OpenOptions::new()
+                .write(true)
+                .open("/sys/class/leds/pca995x:green0/brightness")
+                .unwrap(),
+            red: std::fs::OpenOptions::new()
+                .write(true)
+                .open("/sys/class/leds/pca995x:red0/brightness")
+                .unwrap(),
+        };
+        let led_1 = LedInfo {
+            blue: std::fs::OpenOptions::new()
+                .write(true)
+                .open("/sys/class/leds/pca995x:blue1/brightness")
+                .unwrap(),
+            green: std::fs::OpenOptions::new()
+                .write(true)
+                .open("/sys/class/leds/pca995x:green1/brightness")
+                .unwrap(),
+            red: std::fs::OpenOptions::new()
+                .write(true)
+                .open("/sys/class/leds/pca995x:red1/brightness")
+                .unwrap(),
+        };
+        let led_2 = LedInfo {
+            blue: std::fs::OpenOptions::new()
+                .write(true)
+                .open("/sys/class/leds/pca995x:blue2/brightness")
+                .unwrap(),
+            green: std::fs::OpenOptions::new()
+                .write(true)
+                .open("/sys/class/leds/pca995x:green2/brightness")
+                .unwrap(),
+            red: std::fs::OpenOptions::new()
+                .write(true)
+                .open("/sys/class/leds/pca995x:red2/brightness")
+                .unwrap(),
+        };
+
         AppState {
             output_audio_sender,
             input_audio_sender,
             network_sender,
             call_rx,
+            led_0,
+            led_1,
+            led_2,
+            animation_state: 0,
             screen_state: ScreenState::Home(HomeScreenState::new()),
         }
+    }
+
+    fn animation(&mut self) {
+        // Animation is:
+        // 0: All off
+        // 1: All on
+        // 2: led0.red on, led1.green on, led2.blue on
+        // 3: led0.green on, led1.blue on, led2.red on
+        // 4: led0.blue on, led1.red on, led2.green on
+
+        let led0 = &mut self.led_0;
+        let led1 = &mut self.led_1;
+        let led2 = &mut self.led_2;
+
+        match self.animation_state {
+            0 => {
+                led0.red.write_all(b"0").unwrap();
+                led0.green.write_all(b"0").unwrap();
+                led0.blue.write_all(b"0").unwrap();
+
+                led1.red.write_all(b"0").unwrap();
+                led1.green.write_all(b"0").unwrap();
+                led1.blue.write_all(b"0").unwrap();
+
+                led2.red.write_all(b"0").unwrap();
+                led2.green.write_all(b"0").unwrap();
+                led2.blue.write_all(b"0").unwrap();
+
+                self.animation_state = 1;
+            }
+            1 => {
+                led0.red.write_all(b"128").unwrap();
+                led0.green.write_all(b"128").unwrap();
+                led0.blue.write_all(b"128").unwrap();
+
+                led1.red.write_all(b"128").unwrap();
+                led1.green.write_all(b"128").unwrap();
+                led1.blue.write_all(b"128").unwrap();
+
+                led2.red.write_all(b"128").unwrap();
+                led2.green.write_all(b"128").unwrap();
+                led2.blue.write_all(b"128").unwrap();
+
+                self.animation_state = 2;
+            }
+            2 => {
+                led0.red.write_all(b"128").unwrap();
+                led0.green.write_all(b"0").unwrap();
+                led0.blue.write_all(b"0").unwrap();
+
+                led1.red.write_all(b"0").unwrap();
+                led1.green.write_all(b"128").unwrap();
+                led1.blue.write_all(b"0").unwrap();
+
+                led2.red.write_all(b"0").unwrap();
+                led2.green.write_all(b"0").unwrap();
+                led2.blue.write_all(b"128").unwrap();
+
+                self.animation_state = 3;
+            }
+            3 => {
+                led0.red.write_all(b"0").unwrap();
+                led0.green.write_all(b"128").unwrap();
+                led0.blue.write_all(b"0").unwrap();
+
+                led1.red.write_all(b"0").unwrap();
+                led1.green.write_all(b"0").unwrap();
+                led1.blue.write_all(b"128").unwrap();
+
+                led2.red.write_all(b"128").unwrap();
+                led2.green.write_all(b"0").unwrap();
+                led2.blue.write_all(b"0").unwrap();
+
+                self.animation_state = 4;
+            }
+            4 => {
+                led0.red.write_all(b"0").unwrap();
+                led0.green.write_all(b"0").unwrap();
+                led0.blue.write_all(b"128").unwrap();
+
+                led1.red.write_all(b"128").unwrap();
+                led1.green.write_all(b"0").unwrap();
+                led1.blue.write_all(b"0").unwrap();
+
+                led2.red.write_all(b"0").unwrap();
+                led2.green.write_all(b"128").unwrap();
+                led2.blue.write_all(b"0").unwrap();
+
+                self.animation_state = 0;
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn stop_animation(&mut self) {
+        self.animation_state = 0;
+        let led0 = &mut self.led_0;
+        let led1 = &mut self.led_1;
+        let led2 = &mut self.led_2;
+
+        led0.red.write_all(b"0").unwrap();
+        led0.green.write_all(b"0").unwrap();
+        led0.blue.write_all(b"0").unwrap();
+
+        led1.red.write_all(b"0").unwrap();
+        led1.green.write_all(b"0").unwrap();
+        led1.blue.write_all(b"0").unwrap();
+
+        led2.red.write_all(b"0").unwrap();
+        led2.green.write_all(b"0").unwrap();
+        led2.blue.write_all(b"0").unwrap();
     }
 }
 
@@ -403,19 +576,35 @@ fn handle_events(app: &mut AppState) -> anyhow::Result<bool> {
                 app.screen_state = ScreenState::Call(call_screen_state);
             }
             CallScreenCommand::StopCall => {
-                app.output_audio_sender.send(OutputAudioTaskCommand::Stop)?;
-                app.input_audio_sender.send(InputAudioCommand::Stop)?;
-                app.screen_state = ScreenState::Home(HomeScreenState::new());
+                if let ScreenState::Call(_) = &mut app.screen_state {
+                    app.screen_state = ScreenState::Home(HomeScreenState::new());
+                    app.network_sender
+                        .send(NetworkTaskCommand::StopConnection)?;
+                    app.input_audio_sender.send(InputAudioCommand::Stop)?;
+                    app.output_audio_sender.send(OutputAudioTaskCommand::Stop)?;
+                    app.stop_animation();
+                }
             }
             CallScreenCommand::AcceptCall => {
                 // Accept the call
-                app.network_sender.send(NetworkTaskCommand::SendAccept)?;
+                if let ScreenState::Call(call_state) = &mut app.screen_state {
+                    app.network_sender.send(NetworkTaskCommand::SendAccept)?;
+                    app.input_audio_sender.send(InputAudioCommand::Start)?;
+                    call_state.call_status = CallScreenStatus::InCall {
+                        start_time: std::time::Instant::now(),
+                    };
+                    app.output_audio_sender.send(OutputAudioTaskCommand::Stop)?;
+                    app.stop_animation();
+                }
             }
             CallScreenCommand::RejectCall => {
                 // Reject the call
+                app.screen_state = ScreenState::Home(HomeScreenState::new());
                 app.network_sender
                     .send(NetworkTaskCommand::StopConnection)?;
-                app.screen_state = ScreenState::Home(HomeScreenState::new());
+                app.input_audio_sender.send(InputAudioCommand::Stop)?;
+                app.output_audio_sender.send(OutputAudioTaskCommand::Stop)?;
+                app.stop_animation();
             }
             CallScreenCommand::EndCall => {
                 // End the call
@@ -426,6 +615,33 @@ fn handle_events(app: &mut AppState) -> anyhow::Result<bool> {
             CallScreenCommand::Exit => {
                 return Ok(true);
             }
+            CallScreenCommand::IncreaseVolume => {
+                if let ScreenState::Call(call_state) = &mut app.screen_state {
+                    call_state.volume = (call_state.volume + 5).min(100);
+                    app.output_audio_sender
+                        .send(OutputAudioTaskCommand::SetVolume(call_state.volume))?;
+                }
+            }
+            CallScreenCommand::DecreaseVolume => {
+                if let ScreenState::Call(call_state) = &mut app.screen_state {
+                    call_state.volume = (call_state.volume - 5).max(0);
+                    app.output_audio_sender
+                        .send(OutputAudioTaskCommand::SetVolume(call_state.volume))?;
+                }
+            }
+            CallScreenCommand::ToggleMute => {
+                if let ScreenState::Call(call_state) = &mut app.screen_state {
+                    call_state.is_muted = !call_state.is_muted;
+                    app.output_audio_sender
+                        .send(OutputAudioTaskCommand::SetMute(call_state.is_muted))?;
+                }
+            }
+        }
+    }
+
+    if let ScreenState::Call(call_state) = &mut app.screen_state {
+        if let CallScreenStatus::IncomingCall = call_state.call_status {
+            app.animation();
         }
     }
 
@@ -503,6 +719,7 @@ fn handle_events(app: &mut AppState) -> anyhow::Result<bool> {
                             .send(NetworkTaskCommand::StopConnection)?;
                         app.input_audio_sender.send(InputAudioCommand::Stop)?;
                         app.output_audio_sender.send(OutputAudioTaskCommand::Stop)?;
+                        app.stop_animation();
                     }
                     KeyCode::Char('m') => {
                         state.is_muted = !state.is_muted;

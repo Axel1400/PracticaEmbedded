@@ -201,7 +201,7 @@ fn network_task(rx: Receiver<NetworkTaskCommand>) -> anyhow::Result<()> {
 
         //We need to check if we are in a valid state for receiving a call (base state, not in call, not made a call)
         if let NetworkState::Stopped = current_state {}
-        match rx.recv_timeout(Duration::from_millis(10)) {
+        match rx.try_recv() {
             Ok(NetworkTaskCommand::StartConnection(message)) => {
                 // Start the network connection
                 let packet = NetworkPacket::new_start_connection();
