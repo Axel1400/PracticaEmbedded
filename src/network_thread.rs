@@ -5,7 +5,7 @@ use std::{
 
 use crossbeam::channel::{unbounded, Receiver, Sender};
 
-use crate::terminal_task::CallScreenCommand;
+use crate::{output_audio_task::OutputAudioTaskCommand, terminal_task::CallScreenCommand};
 
 pub enum NetworkTaskCommand {
     StartConnection(std::net::SocketAddr),
@@ -13,12 +13,12 @@ pub enum NetworkTaskCommand {
     SendAccept,
     SendAudio(Vec<i16>),
     MainTaskQueue(Sender<CallScreenCommand>),
+    OutputAudioQueue(Sender<OutputAudioTaskCommand>),
     Exit,
 }
 
 #[derive(PartialEq)]
 enum NetworkState {
-    SendingConnection,
     PendingConnection(std::net::SocketAddr),
     InCall(std::net::SocketAddr),
     Stopped,
@@ -56,7 +56,7 @@ impl NetworkPacket {
     }
 
     fn new_audio(audio: Vec<i16>) -> Self {
-        // Use unsafe to convert the i16 slice to a u8 slice
+        // Use unsafe to convert the i32 slice to a u8 slice
         let data = unsafe {
             Vec::from_raw_parts(
                 audio.as_ptr() as *mut u8,
@@ -64,6 +64,7 @@ impl NetworkPacket {
                 audio.capacity() * 2,
             )
         };
+
         // Forget the audio so it doesn't get dropped
         std::mem::forget(audio);
 
@@ -125,37 +126,81 @@ fn network_task(rx: Receiver<NetworkTaskCommand>) -> anyhow::Result<()> {
             panic!("Invalid command");
         }
     };
+    let output_audio_sender = {
+        if let NetworkTaskCommand::OutputAudioQueue(sender) = rx.recv()? {
+            sender
+        } else {
+            panic!("Invalid command");
+        }
+    };
     // Set read timeout to 50ms
-    udp_socket.set_read_timeout(Some(Duration::from_millis(50)))?;
+    udp_socket.set_read_timeout(Some(Duration::from_millis(100)))?;
 
     loop {
-        if let NetworkState::PendingConnection(peer) = current_state {
-            let mut buffer = [0; 1024];
-            if let Ok(data) = udp_socket.recv_from(&mut buffer) {
-                let packet = NetworkPacket::deserialize(buffer[..data.0].to_vec());
-                if packet.packet_type == NetworkPacketType::Accept {
-                    // We are now in a call
-                    current_state = NetworkState::InCall(peer);
+        match current_state {
+            NetworkState::PendingConnection(peer) => {
+                let mut buffer = [0; 1024];
+                if let Ok(data) = udp_socket.recv_from(&mut buffer) {
+                    if data.0 != 0 {
+                        let packet = NetworkPacket::deserialize(buffer[..data.0].to_vec());
+                        if packet.packet_type == NetworkPacketType::Accept {
+                            // We are now in a call
+                            current_state = NetworkState::InCall(peer);
+                            main_thread_sender.send(CallScreenCommand::StartCall(peer))?;
+                        } else if packet.packet_type == NetworkPacketType::StopConnection {
+                            current_state = NetworkState::Stopped;
+                            main_thread_sender.send(CallScreenCommand::StopCall)?;
+                        }
+                    }
+                }
+            }
+            NetworkState::InCall(_) => {
+                let mut buffer = [0; 1024];
+                if let Ok(data) = udp_socket.recv_from(&mut buffer) {
+                    if data.0 != 0 {
+                        let packet = NetworkPacket::deserialize(buffer[..data.0].to_vec());
+                        if packet.packet_type == NetworkPacketType::Audio {
+                            // Send the audio to the main thread
+                            let audio = unsafe {
+                                Vec::from_raw_parts(
+                                    packet.data.as_ptr() as *mut i16,
+                                    packet.data.len() / 2,
+                                    packet.data.capacity() / 2,
+                                )
+                            };
+                            std::mem::forget(packet.data);
+                            output_audio_sender.send(OutputAudioTaskCommand::Play(audio))?;
+                        } else if packet.packet_type == NetworkPacketType::StopConnection {
+                            current_state = NetworkState::Stopped;
+                            main_thread_sender.send(CallScreenCommand::StopCall)?;
+                        }
+                    }
+                }
+            }
+            NetworkState::Stopped => {
+                // We are in a valid state to receive a call
+                let mut buffer = [0; 1024];
+                if let Ok((data, peer)) = udp_socket.recv_from(&mut buffer) {
+                    if data != 0 {
+                        let packet = NetworkPacket::deserialize(buffer[..data].to_vec());
+                        if packet.packet_type == NetworkPacketType::StartConnection {
+                            current_state = NetworkState::PendingConnection(peer);
+
+                            // Send a heartbeat
+                            let packet = NetworkPacket::new_heartbeat();
+                            let packet = packet.serialize();
+                            udp_socket.send_to(&packet, peer)?;
+
+                            // Send a command to the main thread to start the call screen
+                            main_thread_sender.send(CallScreenCommand::IncomingCall(peer))?;
+                        }
+                    }
                 }
             }
         }
 
         //We need to check if we are in a valid state for receiving a call (base state, not in call, not made a call)
-        if let NetworkState::Stopped = current_state {
-            // We are in a valid state to receive a call
-            let mut buffer = [0; 1024];
-            if let Ok((data, peer)) = udp_socket.recv_from(&mut buffer) {
-                let packet = NetworkPacket::deserialize(buffer[..data].to_vec());
-                if packet.packet_type == NetworkPacketType::StartConnection {
-                    // We are now in a call and we need to notify the other peer that I have accepted
-                    current_state = NetworkState::InCall(peer);
-
-                    udp_socket.send_to(&NetworkPacket::new_accept().serialize(), peer)?;
-
-                    // We need to notify the main thread that we have accepted the call
-                }
-            }
-        }
+        if let NetworkState::Stopped = current_state {}
         match rx.recv_timeout(Duration::from_millis(10)) {
             Ok(NetworkTaskCommand::StartConnection(message)) => {
                 // Start the network connection
@@ -164,18 +209,7 @@ fn network_task(rx: Receiver<NetworkTaskCommand>) -> anyhow::Result<()> {
                 udp_socket.send_to(&serialized_packet, message)?;
 
                 // Wait for a response, it should be a heartbeat
-                let mut buffer = [0; 1024];
-                let (bytes_read, _) = udp_socket.recv_from(&mut buffer)?;
-                let packet = NetworkPacket::deserialize(buffer[..bytes_read].to_vec());
-                if packet.packet_type != NetworkPacketType::Heartbeat {
-                    // Invalid packet
-                    continue;
-                }
-
-                // Send a heartbeat
-                let packet = NetworkPacket::new_heartbeat();
-                let serialized_packet = packet.serialize();
-                udp_socket.send_to(&serialized_packet, message)?;
+                current_state = NetworkState::PendingConnection(message);
             }
             Ok(NetworkTaskCommand::SendAccept) => {
                 if let NetworkState::PendingConnection(peer) = current_state {
@@ -186,6 +220,12 @@ fn network_task(rx: Receiver<NetworkTaskCommand>) -> anyhow::Result<()> {
                 }
             }
             Ok(NetworkTaskCommand::StopConnection) => {
+                if let NetworkState::InCall(peer) = current_state {
+                    // Send a stop connection packet
+                    let packet = NetworkPacket::new_stop_connection();
+                    let serialized_packet = packet.serialize();
+                    udp_socket.send_to(&serialized_packet, peer)?;
+                }
                 current_state = NetworkState::Stopped;
             }
             Ok(NetworkTaskCommand::SendAudio(audio)) => {
@@ -200,6 +240,7 @@ fn network_task(rx: Receiver<NetworkTaskCommand>) -> anyhow::Result<()> {
                 break;
             }
             Ok(NetworkTaskCommand::MainTaskQueue(_)) => {}
+            Ok(NetworkTaskCommand::OutputAudioQueue(_)) => {}
             Err(_) => {
                 // Do nothing
             }
@@ -211,7 +252,11 @@ fn network_task(rx: Receiver<NetworkTaskCommand>) -> anyhow::Result<()> {
 pub fn create_network_task() -> anyhow::Result<(JoinHandle<()>, Sender<NetworkTaskCommand>)> {
     let (sender, receiver) = unbounded::<NetworkTaskCommand>();
 
-    let join = spawn(move || {});
+    let join = spawn(move || {
+        if let Err(e) = network_task(receiver) {
+            eprintln!("Error in network_task: {}", e);
+        }
+    });
 
     Ok((join, sender))
 }

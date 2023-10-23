@@ -10,12 +10,12 @@ pub enum OutputAudioTaskCommand {
     Exit,
 }
 
-// const OUTPUT_HARDWARE_NAME: &str = "plughw:1";
-// const MIXER_HARDWARE_NAME: &str = "hw:1";
-// const MIXER_SELEM_NAME: &str = "SoftMaster";
-const OUTPUT_HARDWARE_NAME: &str = "default";
-const MIXER_HARDWARE_NAME: &str = "default";
-const MIXER_SELEM_NAME: &str = "Master";
+const OUTPUT_HARDWARE_NAME: &str = "voldevice";
+const MIXER_HARDWARE_NAME: &str = "hw:1";
+const MIXER_SELEM_NAME: &str = "Softmaster";
+// const OUTPUT_HARDWARE_NAME: &str = "default";
+// const MIXER_HARDWARE_NAME: &str = "default";
+// const MIXER_SELEM_NAME: &str = "Master";
 
 fn output_audio(receiver: Receiver<OutputAudioTaskCommand>) -> anyhow::Result<()> {
     let output_pcm = alsa::PCM::new(OUTPUT_HARDWARE_NAME, alsa::Direction::Playback, true)?;
@@ -35,7 +35,6 @@ fn output_audio(receiver: Receiver<OutputAudioTaskCommand>) -> anyhow::Result<()
     let selem = mixer.find_selem(&selem_id).unwrap();
 
     selem.set_playback_volume_range(0, 100)?;
-    selem.set_playback_volume_all(100)?;
 
     let io = output_pcm.io_i16()?;
 
@@ -64,6 +63,7 @@ fn output_audio(receiver: Receiver<OutputAudioTaskCommand>) -> anyhow::Result<()
             match cmd {
                 OutputAudioTaskCommand::Play(buffer) => {
                     // Play doesn't actually play, it just buffers the audio
+                    // Convert to i32 buffer
                     play_buffer.extend_from_slice(&buffer);
                 }
                 OutputAudioTaskCommand::Stop => {

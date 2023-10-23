@@ -13,3 +13,10 @@ crossterm = "0.27.0"
 input-linux = "0.6.0"
 minimp3 = "0.5.1"
 ratatui = "0.23.0"
+
+[target.aarch64-unknown-linux-gnu]
+linker = "/opt/fsl-imx-xwayland/5.15-kirkstone/sysroots/x86_64-pokysdk-linux/usr/bin/aarch64-poky-linux/aarch64-poky-linux-ld"
+rustflags = [
+    "-C", "link-arg=--sysroot=/opt/fsl-imx-xwayland/5.15-kirkstone/sysroots/armv8a-poky-linux"
+]
+# Set sysroot to the location of the sysroot for the target

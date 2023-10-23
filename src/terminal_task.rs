@@ -1,4 +1,7 @@
-use crate::{network_thread::NetworkTaskCommand, output_audio_task::OutputAudioTaskCommand};
+use crate::{
+    input_audio_task::InputAudioCommand, network_thread::NetworkTaskCommand,
+    output_audio_task::OutputAudioTaskCommand,
+};
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent},
@@ -81,7 +84,9 @@ enum CallScreenStatus {
 }
 
 pub enum CallScreenCommand {
-    StartCall,
+    StartCall(SocketAddr),
+    IncomingCall(SocketAddr),
+    StopCall,
     EndCall,
     AcceptCall,
     RejectCall,
@@ -139,6 +144,7 @@ enum ScreenState {
 
 struct AppState {
     pub output_audio_sender: Sender<OutputAudioTaskCommand>,
+    pub input_audio_sender: Sender<InputAudioCommand>,
     pub network_sender: Sender<NetworkTaskCommand>,
     pub call_rx: Receiver<CallScreenCommand>,
     pub screen_state: ScreenState,
@@ -147,11 +153,13 @@ struct AppState {
 impl AppState {
     pub fn new(
         output_audio_sender: Sender<OutputAudioTaskCommand>,
+        input_audio_sender: Sender<InputAudioCommand>,
         network_sender: Sender<NetworkTaskCommand>,
         call_rx: Receiver<CallScreenCommand>,
     ) -> AppState {
         AppState {
             output_audio_sender,
+            input_audio_sender,
             network_sender,
             call_rx,
             screen_state: ScreenState::Home(HomeScreenState::new()),
@@ -323,6 +331,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut AppState) {
 
 fn run_terminal_task(
     output_audio: Sender<OutputAudioTaskCommand>,
+    input_audio: Sender<InputAudioCommand>,
     network_queue: Sender<NetworkTaskCommand>,
     call_rx: Receiver<CallScreenCommand>,
 ) -> anyhow::Result<()> {
@@ -333,7 +342,7 @@ fn run_terminal_task(
 
     let mut should_quit = false;
 
-    let mut app = AppState::new(output_audio, network_queue, call_rx);
+    let mut app = AppState::new(output_audio, input_audio, network_queue, call_rx);
 
     while !should_quit {
         terminal.draw(|f| {
@@ -351,11 +360,12 @@ fn run_terminal_task(
 
 pub fn create_terminal_task(
     output_audio: Sender<OutputAudioTaskCommand>,
+    input_audio: Sender<InputAudioCommand>,
     network_queue: Sender<NetworkTaskCommand>,
 ) -> (JoinHandle<()>, Sender<CallScreenCommand>) {
     let (call_tx, call_rx) = unbounded();
     let thread = thread::spawn(move || {
-        if let Err(e) = run_terminal_task(output_audio, network_queue, call_rx) {
+        if let Err(e) = run_terminal_task(output_audio, input_audio, network_queue, call_rx) {
             eprintln!("Error: {}", e);
         }
     });
@@ -364,8 +374,62 @@ pub fn create_terminal_task(
 }
 
 fn handle_events(app: &mut AppState) -> anyhow::Result<bool> {
+    // Check if we have a call request
+    if let Ok(cmd) = app.call_rx.try_recv() {
+        match cmd {
+            CallScreenCommand::StartCall(sock) => {
+                let call_screen_state = {
+                    let mut call_screen_state = CallScreenState::new(sock.ip());
+                    call_screen_state.call_status = CallScreenStatus::InCall {
+                        start_time: std::time::Instant::now(),
+                    };
+                    app.input_audio_sender.send(InputAudioCommand::Start)?;
+                    call_screen_state
+                };
+                app.screen_state = ScreenState::Call(call_screen_state);
+            }
+            CallScreenCommand::IncomingCall(sock) => {
+                let call_screen_state = {
+                    let mut call_screen_state = CallScreenState::new(sock.ip());
+                    call_screen_state.call_status = CallScreenStatus::IncomingCall;
+                    call_screen_state
+                };
+                const INCOMING_CALL_SOUND: &[u8] = include_bytes!("assets/capitao_whatsapp.mp3");
+                let play_buffer = crate::utils::decode_bytes(INCOMING_CALL_SOUND);
+                app.output_audio_sender
+                    .send(OutputAudioTaskCommand::Play(play_buffer))?;
+                app.screen_state = ScreenState::Call(call_screen_state);
+            }
+            CallScreenCommand::StopCall => {
+                app.screen_state = ScreenState::Home(HomeScreenState::new());
+            }
+            CallScreenCommand::AcceptCall => {
+                // Accept the call
+                app.network_sender.send(NetworkTaskCommand::SendAccept)?;
+            }
+            CallScreenCommand::RejectCall => {
+                // Reject the call
+                app.network_sender
+                    .send(NetworkTaskCommand::StopConnection)?;
+                app.screen_state = ScreenState::Home(HomeScreenState::new());
+            }
+            CallScreenCommand::EndCall => {
+                // End the call
+                app.network_sender
+                    .send(NetworkTaskCommand::StopConnection)?;
+                app.screen_state = ScreenState::Home(HomeScreenState::new());
+            }
+            CallScreenCommand::Exit => {
+                return Ok(true);
+            }
+        }
+    }
+
     match &mut app.screen_state {
         ScreenState::Home(home_state) => {
+            if !event::poll(std::time::Duration::from_millis(100))? {
+                return Ok(false);
+            }
             if let Event::Key(KeyEvent { code, .. }) = event::read()? {
                 match code {
                     KeyCode::Up => {
@@ -393,6 +457,9 @@ fn handle_events(app: &mut AppState) -> anyhow::Result<bool> {
             }
         }
         ScreenState::EnterCallInfo(state) => {
+            if !event::poll(std::time::Duration::from_millis(100))? {
+                return Ok(false);
+            }
             if let Event::Key(KeyEvent { code, .. }) = event::read()? {
                 match code {
                     KeyCode::Enter => {
@@ -428,6 +495,9 @@ fn handle_events(app: &mut AppState) -> anyhow::Result<bool> {
                     KeyCode::Esc => {
                         // TODO: End call should wait a few seconds before going back to the home screen
                         app.screen_state = ScreenState::Home(HomeScreenState::new());
+                        app.network_sender
+                            .send(NetworkTaskCommand::StopConnection)?;
+                        app.input_audio_sender.send(InputAudioCommand::Stop)?;
                     }
                     KeyCode::Char('m') => {
                         state.is_muted = !state.is_muted;
@@ -443,6 +513,15 @@ fn handle_events(app: &mut AppState) -> anyhow::Result<bool> {
                         state.volume = (state.volume + 5).min(100);
                         app.output_audio_sender
                             .send(OutputAudioTaskCommand::SetVolume(state.volume))?;
+                    }
+                    KeyCode::Enter => {
+                        if let CallScreenStatus::IncomingCall = state.call_status {
+                            app.network_sender.send(NetworkTaskCommand::SendAccept)?;
+                            app.input_audio_sender.send(InputAudioCommand::Start)?;
+                            state.call_status = CallScreenStatus::InCall {
+                                start_time: std::time::Instant::now(),
+                            };
+                        }
                     }
                     _ => {}
                 }
