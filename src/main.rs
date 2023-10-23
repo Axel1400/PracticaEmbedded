@@ -1,4 +1,4 @@
-use std::io::{stdout, Write};
+use std::io::stdout;
 
 use crossterm::{
     terminal::{disable_raw_mode, LeaveAlternateScreen},

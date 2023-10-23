@@ -1,4 +1,4 @@
-use std::{io::Write, thread::JoinHandle};
+use std::thread::JoinHandle;
 
 use alsa::{
     pcm::{HwParams, PCM},
