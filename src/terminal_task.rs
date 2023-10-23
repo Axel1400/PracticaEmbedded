@@ -383,6 +383,7 @@ fn handle_events(app: &mut AppState) -> anyhow::Result<bool> {
                     call_screen_state.call_status = CallScreenStatus::InCall {
                         start_time: std::time::Instant::now(),
                     };
+                    app.output_audio_sender.send(OutputAudioTaskCommand::Stop)?;
                     app.input_audio_sender.send(InputAudioCommand::Start)?;
                     call_screen_state
                 };
@@ -392,6 +393,7 @@ fn handle_events(app: &mut AppState) -> anyhow::Result<bool> {
                 let call_screen_state = {
                     let mut call_screen_state = CallScreenState::new(sock.ip());
                     call_screen_state.call_status = CallScreenStatus::IncomingCall;
+                    app.output_audio_sender.send(OutputAudioTaskCommand::Stop)?;
                     call_screen_state
                 };
                 const INCOMING_CALL_SOUND: &[u8] = include_bytes!("assets/capitao_whatsapp.mp3");
@@ -401,6 +403,8 @@ fn handle_events(app: &mut AppState) -> anyhow::Result<bool> {
                 app.screen_state = ScreenState::Call(call_screen_state);
             }
             CallScreenCommand::StopCall => {
+                app.output_audio_sender.send(OutputAudioTaskCommand::Stop)?;
+                app.input_audio_sender.send(InputAudioCommand::Stop)?;
                 app.screen_state = ScreenState::Home(HomeScreenState::new());
             }
             CallScreenCommand::AcceptCall => {
@@ -498,6 +502,7 @@ fn handle_events(app: &mut AppState) -> anyhow::Result<bool> {
                         app.network_sender
                             .send(NetworkTaskCommand::StopConnection)?;
                         app.input_audio_sender.send(InputAudioCommand::Stop)?;
+                        app.output_audio_sender.send(OutputAudioTaskCommand::Stop)?;
                     }
                     KeyCode::Char('m') => {
                         state.is_muted = !state.is_muted;
@@ -521,6 +526,7 @@ fn handle_events(app: &mut AppState) -> anyhow::Result<bool> {
                             state.call_status = CallScreenStatus::InCall {
                                 start_time: std::time::Instant::now(),
                             };
+                            app.output_audio_sender.send(OutputAudioTaskCommand::Stop)?;
                         }
                     }
                     _ => {}

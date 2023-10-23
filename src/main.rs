@@ -1,7 +1,11 @@
 use std::io::stdout;
 
-use crossterm::{terminal::{disable_raw_mode, LeaveAlternateScreen}, ExecutableCommand};
+use crossterm::{
+    terminal::{disable_raw_mode, LeaveAlternateScreen},
+    ExecutableCommand,
+};
 
+mod events;
 mod input_audio_task;
 mod network_thread;
 mod output_audio_task;
@@ -9,7 +13,6 @@ mod terminal_task;
 mod utils;
 
 const READY_TO_PAIR_SOUND: &[u8] = include_bytes!("assets/ready_to_pair.mp3");
-
 
 fn main() -> anyhow::Result<()> {
     std::panic::set_hook(Box::new(|panic_info| {

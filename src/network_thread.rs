@@ -155,7 +155,7 @@ fn network_task(rx: Receiver<NetworkTaskCommand>) -> anyhow::Result<()> {
                 }
             }
             NetworkState::InCall(_) => {
-                let mut buffer = [0; 1024];
+                let mut buffer = vec![0; 1024 * 32 * 2];
                 if let Ok(data) = udp_socket.recv_from(&mut buffer) {
                     if data.0 != 0 {
                         let packet = NetworkPacket::deserialize(buffer[..data.0].to_vec());
@@ -217,6 +217,7 @@ fn network_task(rx: Receiver<NetworkTaskCommand>) -> anyhow::Result<()> {
                     let packet = NetworkPacket::new_accept();
                     let serialized_packet = packet.serialize();
                     udp_socket.send_to(&serialized_packet, peer)?;
+                    current_state = NetworkState::InCall(peer);
                 }
             }
             Ok(NetworkTaskCommand::StopConnection) => {

@@ -10,6 +10,6 @@ pub fn decode_bytes(bytes: &[u8]) -> Vec<i16> {
             Err(e) => panic!("Error decoding mp3: {:?}", e),
         }
     }
-    
+
     samples
 }
