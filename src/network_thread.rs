@@ -134,7 +134,7 @@ fn network_task(rx: Receiver<NetworkTaskCommand>) -> anyhow::Result<()> {
         }
     };
     // Set read timeout to 50ms
-    udp_socket.set_read_timeout(Some(Duration::from_millis(100)))?;
+    udp_socket.set_read_timeout(Some(Duration::from_millis(1)))?;
 
     loop {
         match current_state {

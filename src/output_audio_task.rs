@@ -47,11 +47,7 @@ fn output_audio(receiver: Receiver<OutputAudioTaskCommand>) -> anyhow::Result<()
             // Write ONLY the amount of audio that we can fit in the buffer
             let buffer_size = pcm_status.get_avail() as usize;
 
-            let buffer_size = if buffer_size > play_buffer.len() {
-                play_buffer.len()
-            } else {
-                buffer_size
-            };
+            let buffer_size = play_buffer.len().min(buffer_size);
 
             let buffer = play_buffer.drain(0..buffer_size).collect::<Vec<i16>>();
 
@@ -63,7 +59,10 @@ fn output_audio(receiver: Receiver<OutputAudioTaskCommand>) -> anyhow::Result<()
             match cmd {
                 OutputAudioTaskCommand::Play(buffer) => {
                     // Play doesn't actually play, it just buffers the audio
-                    // Convert to i32 buffer
+                    // If play_buffer.len() > 4000, clear the first buffer.len() elements
+                    if play_buffer.len() > 4000 {
+                        play_buffer.drain(0..buffer.len());
+                    }
                     play_buffer.extend_from_slice(&buffer);
                 }
                 OutputAudioTaskCommand::Stop => {
